@@ -5,13 +5,18 @@
 .DESCRIPTION
   Scopey manages common IPv4 Microsoft DHCP Server tasks from an admin workstation
   or directly from the DHCP server. It uses the DhcpServer PowerShell module and
-  supports a remote DHCP server through the -DhcpServer parameter.
+  supports remote DHCP servers through the -DhcpServer parameter or a local server
+  inventory file.
 
 .PARAMETER DhcpServer
-  DHCP server to manage. Defaults to the local computer.
+  DHCP server to manage. If omitted, Scopey prompts you to select from the known
+  server inventory or type a server manually.
 
 .PARAMETER Credential
   Optional credential used for DHCP Server cmdlets that support -Credential.
+
+.PARAMETER ServerListPath
+  Optional path to a JSON file containing known DHCP servers.
 
 .EXAMPLE
   .\Scopey.ps1 -DhcpServer DHCP01
@@ -19,18 +24,25 @@
 .EXAMPLE
   .\Scopey.ps1 -DhcpServer DHCP01 -Credential (Get-Credential)
 
+.EXAMPLE
+  .\Scopey.ps1 -ServerListPath .\Scopey.Servers.json
+
 .NOTES
   Forked from DHCP_Scope_Manager by Flemming Sørvollen Skaret.
-  Scopey modernization adds remote server targeting and cleaner command wrapping.
+  Scopey modernization adds remote server targeting, known DHCP server selection,
+  and intelligent IP availability checks.
 #>
 
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$DhcpServer = $env:COMPUTERNAME,
+    [string]$DhcpServer,
 
     [Parameter()]
-    [System.Management.Automation.PSCredential]$Credential
+    [System.Management.Automation.PSCredential]$Credential,
+
+    [Parameter()]
+    [string]$ServerListPath = (Join-Path -Path $PSScriptRoot -ChildPath 'Scopey.Servers.json')
 )
 
 Set-StrictMode -Version 2.0
@@ -39,6 +51,9 @@ $ErrorActionPreference = 'Stop'
 $script:FirstRun = $true
 $script:SelectedScope = $null
 $script:SelectedScopeId = $null
+$script:DhcpServer = $DhcpServer
+$script:Credential = $Credential
+$script:ServerListPath = $ServerListPath
 
 function Import-ScopeyDhcpModule {
     try {
@@ -75,6 +90,128 @@ function Invoke-ScopeyDhcpCommand {
     & $CommandName @boundParameters
 }
 
+function Get-ScopeyServerInventory {
+    if (-not (Test-Path -Path $script:ServerListPath)) {
+        return @()
+    }
+
+    try {
+        $servers = Get-Content -Path $script:ServerListPath -Raw | ConvertFrom-Json
+        if (-not $servers) { return @() }
+        return @($servers)
+    }
+    catch {
+        Write-Host "Unable to read server inventory at $($script:ServerListPath)." -ForegroundColor Yellow
+        Write-Host $_.Exception.Message -ForegroundColor DarkYellow
+        return @()
+    }
+}
+
+function Save-ScopeyServerInventory {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Servers
+    )
+
+    try {
+        $folder = Split-Path -Path $script:ServerListPath -Parent
+        if ($folder -and -not (Test-Path -Path $folder)) {
+            New-Item -Path $folder -ItemType Directory -Force | Out-Null
+        }
+
+        $Servers | ConvertTo-Json -Depth 5 | Set-Content -Path $script:ServerListPath -Encoding UTF8
+    }
+    catch {
+        Write-Host "Unable to save server inventory at $($script:ServerListPath)." -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor DarkYellow
+    }
+}
+
+function Add-ScopeyKnownServer {
+    $name = Read-Host 'DHCP server name or FQDN'
+    if (-not $name) {
+        Write-Host 'No server entered.' -ForegroundColor Yellow
+        Show-ScopeyStartupServerPicker
+        return
+    }
+
+    $location = Read-Host 'Optional location label, such as HQ, Public Safety, Site 2, Lab'
+    $description = Read-Host 'Optional description'
+
+    $servers = Get-ScopeyServerInventory
+    $existing = $servers | Where-Object { $_.Name -eq $name }
+
+    if ($existing) {
+        Write-Host "Server $name already exists in the inventory." -ForegroundColor Yellow
+    }
+    else {
+        $servers += [PSCustomObject]@{
+            Name = $name
+            Location = $location
+            Description = $description
+        }
+
+        Save-ScopeyServerInventory -Servers $servers
+        Write-Host "Added $name to the known DHCP server inventory." -ForegroundColor Green
+    }
+
+    Show-ScopeyStartupServerPicker
+}
+
+function Show-ScopeyStartupServerPicker {
+    $servers = Get-ScopeyServerInventory
+
+    Write-Host ''
+    Write-Host '+-------------------------------------------------------+' -ForegroundColor Magenta
+    Write-Host ' Scopey - Select DHCP Server'
+    Write-Host '+-------------------------------------------------------+' -ForegroundColor Magenta
+
+    if ($servers.Count -gt 0) {
+        for ($i = 0; $i -lt $servers.Count; $i++) {
+            $server = $servers[$i]
+            $label = if ($server.Location) { "[$($server.Location)]" } else { '[No location]' }
+            Write-Host " $($i + 1) - $($server.Name) $label $($server.Description)"
+        }
+    }
+    else {
+        Write-Host ' No known DHCP servers saved yet.' -ForegroundColor Yellow
+    }
+
+    Write-Host ' M - Manually type a DHCP server'
+    Write-Host ' A - Add a DHCP server to known servers'
+    Write-Host ' L - Use local computer'
+    Write-Host ' Q - Quit'
+    Write-Host '+-------------------------------------------------------+' -ForegroundColor Magenta
+
+    $choice = Read-Host 'Select option'
+
+    if ($choice -match '^\d+$') {
+        $index = [int]$choice - 1
+        if ($index -ge 0 -and $index -lt $servers.Count) {
+            $script:DhcpServer = $servers[$index].Name
+            return
+        }
+    }
+
+    switch ($choice.ToUpperInvariant()) {
+        'M' {
+            $manualServer = Read-Host 'Enter DHCP server name, FQDN, or IP'
+            if ($manualServer) { $script:DhcpServer = $manualServer; return }
+        }
+        'A' { Add-ScopeyKnownServer; return }
+        'L' { $script:DhcpServer = $env:COMPUTERNAME; return }
+        'Q' { exit }
+    }
+
+    Write-Host 'Invalid selection.' -ForegroundColor Red
+    Show-ScopeyStartupServerPicker
+}
+
+function Select-ScopeyDhcpServer {
+    if ($script:DhcpServer) { return }
+    Show-ScopeyStartupServerPicker
+}
+
 function Set-ScopeyWindowTitle {
     $scopeText = if ($script:SelectedScopeId) { "[$($script:SelectedScopeId)] $($script:SelectedScope.Name)" } else { 'None selected' }
     $host.UI.RawUI.WindowTitle = "Scopey - DHCP Server: $($script:DhcpServer) - Selected Scope: $scopeText"
@@ -89,8 +226,10 @@ function Test-ScopeyDhcpServerConnection {
         Write-Host "ERROR: Unable to query DHCP server '$($script:DhcpServer)'." -ForegroundColor Red
         Write-Host 'Verify network reachability, permissions, firewall rules, and that the DHCP Server service/tools are available.' -ForegroundColor Yellow
         Write-Host "Details: $($_.Exception.Message)" -ForegroundColor DarkYellow
-        Read-Host 'Press ENTER to exit'
-        exit 1
+        Read-Host 'Press ENTER to return to server selection'
+        $script:DhcpServer = $null
+        Select-ScopeyDhcpServer
+        Test-ScopeyDhcpServerConnection
     }
 }
 
@@ -306,11 +445,166 @@ function Find-ScopeyLeaseByIp {
     finally { Show-ScopeyMenu }
 }
 
+function Test-ScopeyIpAvailability {
+    param(
+        [Parameter(Mandatory)]
+        [string]$IPAddress,
+
+        [Parameter()]
+        [int[]]$TcpPorts = @(80, 443, 515, 631, 9100)
+    )
+
+    $lease = $null
+    $reservation = $null
+    $dnsName = $null
+    $pingResponded = $false
+    $openPorts = @()
+    $signals = New-Object System.Collections.Generic.List[string]
+
+    try {
+        $lease = Invoke-ScopeyDhcpCommand -CommandName Get-DhcpServerv4Lease -Parameters @{ IPAddress = $IPAddress }
+    }
+    catch { }
+
+    try {
+        $reservation = Invoke-ScopeyDhcpCommand -CommandName Get-DhcpServerv4Reservation -Parameters @{ IPAddress = $IPAddress }
+    }
+    catch { }
+
+    try {
+        $dnsResult = Resolve-DnsName -Name $IPAddress -ErrorAction Stop | Select-Object -First 1
+        if ($dnsResult.NameHost) { $dnsName = $dnsResult.NameHost }
+        elseif ($dnsResult.Name) { $dnsName = $dnsResult.Name }
+    }
+    catch { }
+
+    try {
+        $pingResponded = Test-Connection -ComputerName $IPAddress -Count 1 -Quiet -ErrorAction SilentlyContinue
+    }
+    catch { $pingResponded = $false }
+
+    foreach ($port in $TcpPorts) {
+        try {
+            $tcp = Test-NetConnection -ComputerName $IPAddress -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue
+            if ($tcp) { $openPorts += $port }
+        }
+        catch { }
+    }
+
+    if ($reservation) { $signals.Add('DHCP reservation exists') }
+    if ($lease) { $signals.Add("DHCP lease exists: $($lease.AddressState)") }
+    if ($dnsName) { $signals.Add("DNS record exists: $dnsName") }
+    if ($pingResponded) { $signals.Add('Ping responded') }
+    if ($openPorts.Count -gt 0) { $signals.Add("Open TCP ports: $($openPorts -join ', ')") }
+
+    $status = 'Likely Available'
+    $confidence = 5
+
+    if ($reservation) {
+        $status = 'Reserved'
+        $confidence = 0
+    }
+    elseif ($lease) {
+        $status = 'In Use - DHCP Lease Found'
+        $confidence = 0
+    }
+    elseif ($pingResponded -or $openPorts.Count -gt 0) {
+        $status = 'Probably In Use - Network Response Found'
+        $confidence = 1
+    }
+    elseif ($dnsName) {
+        $status = 'Possibly In Use - DNS Record Found'
+        $confidence = 3
+    }
+
+    [PSCustomObject]@{
+        IPAddress = $IPAddress
+        Status = $status
+        Confidence = $confidence
+        DhcpLease = [bool]$lease
+        Reservation = [bool]$reservation
+        DNSName = $dnsName
+        Ping = $pingResponded
+        OpenTcpPorts = ($openPorts -join ',')
+        Signals = ($signals -join '; ')
+    }
+}
+
+function Find-ScopeyLikelyAvailableIp {
+    $countInput = Read-Host 'How many likely available addresses should Scopey find? [Default: 5]'
+    $desiredCount = if ($countInput -match '^\d+$') { [int]$countInput } else { 5 }
+
+    $scanPortsInput = Read-Host 'Probe common printer/web ports too? This is slower. [Y/N, Default: N]'
+    $tcpPorts = if ($scanPortsInput -match '^[Yy]') { @(80, 443, 515, 631, 9100) } else { @() }
+
+    try {
+        $stats = Invoke-ScopeyDhcpCommand -CommandName Get-DhcpServerv4ScopeStatistics -Parameters @{ ScopeId = $script:SelectedScopeId }
+        if ($stats.Free -eq 0) {
+            Write-Host 'There are no DHCP-free addresses in this scope.' -ForegroundColor Yellow
+            Show-ScopeyMenu
+            return
+        }
+
+        $candidateCount = [Math]::Min([int]$stats.Free, [Math]::Max($desiredCount * 5, 10))
+        $candidates = Invoke-ScopeyDhcpCommand -CommandName Get-DhcpServerv4FreeIPAddress -Parameters @{
+            ScopeId = $script:SelectedScopeId
+            NumAddress = $candidateCount
+        }
+
+        $results = foreach ($candidate in $candidates) {
+            Test-ScopeyIpAvailability -IPAddress $candidate.IPAddressToString -TcpPorts $tcpPorts
+        }
+
+        $results |
+            Sort-Object @{ Expression = 'Confidence'; Descending = $true }, IPAddress |
+            Select-Object -First $desiredCount |
+            Format-Table IPAddress, Status, Confidence, DNSName, Ping, OpenTcpPorts -AutoSize
+    }
+    catch {
+        Write-Host 'An error occurred while searching for likely available IP addresses.' -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor DarkYellow
+    }
+    finally { Show-ScopeyMenu }
+}
+
+function Test-ScopeySpecificIp {
+    $ipAddress = Read-Host 'Enter IP address to test'
+    if (-not $ipAddress) {
+        Write-Host 'No IP address entered.' -ForegroundColor Yellow
+        Show-ScopeyMenu
+        return
+    }
+
+    $scanPortsInput = Read-Host 'Probe common printer/web ports too? [Y/N, Default: Y]'
+    $tcpPorts = if ($scanPortsInput -match '^[Nn]') { @() } else { @(80, 443, 515, 631, 9100) }
+
+    try {
+        Test-ScopeyIpAvailability -IPAddress $ipAddress -TcpPorts $tcpPorts | Format-List
+    }
+    catch {
+        Write-Host 'An error occurred while testing the IP address.' -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor DarkYellow
+    }
+    finally { Show-ScopeyMenu }
+}
+
+function Switch-ScopeyDhcpServer {
+    $script:SelectedScope = $null
+    $script:SelectedScopeId = $null
+    $script:FirstRun = $true
+    $script:DhcpServer = $null
+
+    Show-ScopeyStartupServerPicker
+    Test-ScopeyDhcpServerConnection
+    Select-ScopeyScope
+}
+
 function Show-ScopeyServerInfo {
     Write-Host ''
     Write-Host "Scopey server target: $($script:DhcpServer)" -ForegroundColor Cyan
     Write-Host "Running from: $env:COMPUTERNAME" -ForegroundColor Cyan
     Write-Host "Credential supplied: $([bool]$script:Credential)" -ForegroundColor Cyan
+    Write-Host "Server inventory path: $($script:ServerListPath)" -ForegroundColor Cyan
     Show-ScopeyMenu
 }
 
@@ -327,6 +621,7 @@ function Show-ScopeyMenu {
     Write-Host '+-------------------------------------------------------+' -ForegroundColor Magenta
     Write-Host ' Scopey - DHCP Scope Helper'
     Write-Host " DHCP Server: $($script:DhcpServer)"
+    Write-Host " Selected Scope: [$($script:SelectedScopeId)] $($script:SelectedScope.Name)"
     Write-Host '+-------------------------------------------------------+' -ForegroundColor Magenta
     Write-Host ' 0  - Exit'
     Write-Host ' 1  - Select a New Scope'
@@ -341,6 +636,9 @@ function Show-ScopeyMenu {
     Write-Host ' 10 - Find lease by ClientID'
     Write-Host ' 11 - Find lease by IP'
     Write-Host ' 12 - Show server connection info'
+    Write-Host ' 13 - Find likely available IP addresses'
+    Write-Host ' 14 - Test specific IP availability'
+    Write-Host ' 15 - Switch DHCP server'
     Write-Host '+-------------------------------------------------------+' -ForegroundColor Magenta
 
     $choice = Read-Host 'Select alternative'
@@ -359,6 +657,9 @@ function Show-ScopeyMenu {
         '10' { Find-ScopeyLeaseByClientId }
         '11' { Find-ScopeyLeaseByIp }
         '12' { Show-ScopeyServerInfo }
+        '13' { Find-ScopeyLikelyAvailableIp }
+        '14' { Test-ScopeySpecificIp }
+        '15' { Switch-ScopeyDhcpServer }
         default {
             Write-Host 'Invalid choice.' -ForegroundColor Red
             Show-ScopeyMenu
@@ -366,10 +667,8 @@ function Show-ScopeyMenu {
     }
 }
 
-$script:DhcpServer = $DhcpServer
-$script:Credential = $Credential
-
-Set-ScopeyWindowTitle
 Import-ScopeyDhcpModule
+Select-ScopeyDhcpServer
+Set-ScopeyWindowTitle
 Test-ScopeyDhcpServerConnection
 Select-ScopeyScope
