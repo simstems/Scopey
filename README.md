@@ -11,7 +11,7 @@ IPSherpa can be run from an RSAT-enabled administrator workstation instead of re
 ---
 
 <p align="center">
-  <img src="images/ipsherpa-mascot.png" alt="IPSherpa Mascot" width="450">
+  <img src="./ipsherpa-mascot.png" alt="IPSherpa Mascot" width="450">
 </p>
 
 <h1 align="center">IPSherpa</h1>
