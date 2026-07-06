@@ -1,0 +1,17 @@
+[
+  {
+    "Name": "DHCP01.contoso.local",
+    "Location": "HQ",
+    "Description": "Primary DHCP server"
+  },
+  {
+    "Name": "DHCP02.contoso.local",
+    "Location": "Site 2",
+    "Description": "Remote site DHCP server"
+  },
+  {
+    "Name": "DHCP-LAB.contoso.local",
+    "Location": "Lab",
+    "Description": "Testing and lab DHCP server"
+  }
+]
