@@ -10,6 +10,31 @@ IPSherpa can be run from an RSAT-enabled administrator workstation instead of re
 
 ---
 
+<p align="center">
+  <img src="images/ipsherpa-mascot.png" alt="IPSherpa Mascot" width="450">
+</p>
+
+<h1 align="center">IPSherpa</h1>
+
+<p align="center">
+<b>Find. Verify. Reserve.</b><br>
+Open-source IP & DHCP administration toolkit for Windows administrators.
+</p>
+
+## Meet IPSherpa
+
+IPSherpa's mascot represents the purpose of the project: guiding administrators safely through IP space.
+
+Just as a mountain sherpa helps climbers navigate difficult terrain, IPSherpa helps network administrators navigate complex DHCP environments by helping them:
+
+- 🔍 Discover available addresses
+- ✅ Verify they are truly unused
+- 📌 Create reservations safely
+- 🌐 Manage multiple DHCP servers
+- 🧭 Navigate networks with confidence
+
+---
+
 ## Project Status
 
 IPSherpa is currently in early modernization.
