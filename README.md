@@ -1,3 +1,14 @@
+<p align="center">
+  <img src="./ipsherpa-mascot.png" alt="IPSherpa Mascot" width="450">
+</p>
+
+<h1 align="center">IPSherpa</h1>
+
+<p align="center">
+<b>Find. Verify. Reserve.</b><br>
+Open-source IP & DHCP administration toolkit for Windows administrators.
+</p>
+
 # IPSherpa
 
 **IPSherpa** is an open-source Microsoft DHCP and IP address administration toolkit for Windows administrators.
@@ -10,18 +21,7 @@ IPSherpa can be run from an RSAT-enabled administrator workstation instead of re
 
 ---
 
-<p align="center">
-  <img src="./ipsherpa-mascot.png" alt="IPSherpa Mascot" width="450">
-</p>
-
-<h1 align="center">IPSherpa</h1>
-
-<p align="center">
-<b>Find. Verify. Reserve.</b><br>
-Open-source IP & DHCP administration toolkit for Windows administrators.
-</p>
-
-## Meet IPSherpa
+## IPSherpa Mascot
 
 IPSherpa's mascot represents the purpose of the project: guiding administrators safely through IP space.
 
